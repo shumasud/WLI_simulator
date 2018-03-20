@@ -84,31 +84,17 @@ class Light(object):
         return n
 
     @staticmethod
-    def phase_shift_Ag(wl):
-        n = 1.2104 * wl - 1.3392
-        k = 6.8276 * wl + 0.1761
-        phi = np.arctan(-2 * k / (n*n + k*k - 1))
-        return phi
+    def phase_shift(wl, material):
+        params = {}
+        params['Ag'] = (1.2104, -1.3392, 6.8276, 0.1761)
+        params['Fe'] = (0.5294, -2.7947, 2.7647, 1.3724)
+        params['Al'] = (1.3394, -0.6279, 11.297, -1.5539)
+        params['Au'] = (0.6118, -0.3893, 6.4455, -0.1919)
 
-    @staticmethod
-    def phase_shift_Fe(wl):
-        n = 0.5294 * wl - 2.7947
-        k = 2.7647 * wl + 1.3724
+        param = params[material]
+        n = param[0] * wl + param[1]
+        k = param[2] * wl + param[3]
         phi = np.arctan(-2 * k / (n*n + k*k - 1))
-        return phi
-
-    @staticmethod
-    def phase_shift_Al(wl):
-        n = 1.3394 * wl - 0.6279
-        k = 11.297 * wl - 1.5539
-        phi = np.arctan(-2 * k / (n*n + k*k - 1))
-        return phi
-
-    @staticmethod
-    def phase_shift_Au(wl):
-        n = 0.6118 * wl - 0.3893
-        k = 6.4455 * wl - 0.1919
-        phi = np.arctan(-2 * k / (n * n + k * k - 1))
         return phi
 
     def I_gauss(self, wl):
@@ -119,7 +105,7 @@ class Light(object):
     def make_scale(self, scan_len, scan_step):
         self.scale_ = np.arange(-scan_len/2, scan_len/2 + scan_step, scan_step)
 
-    def make_fringe(self, l_ref=3000*1000, l_bs=0, phi=0, offset=0):
+    def make_fringe(self, l_ref=3000*1000, l_bs=0, offset=0, material='BK7'):
         """スケールと干渉縞を作成"""
         fringe_list = []
         for wl in self.wl_list_:
@@ -127,15 +113,18 @@ class Light(object):
             print("making fringe")
 
             k_i = 2 * np.pi / wl
-            phi_r = self.phase_shift_Ag(wl) + phi   # 反射での位相シフト
             intensity = self.I_gauss(wl)
 
-            light_ref_i = cmath.exp(1j * k_i * (l_ref + offset + self.ref_index_BK7(wl) * l_bs) * 2) * cmath.exp(1j * phi)    # 参照光(phiの部分をphi_rに変更すると反射での分散を計算可能)
-            light_scan_i = [cmath.exp(1j * k_i * (l_ref + self.ref_index_BK7(self.wl_c) * l_bs + x) * 2) for x in self.scale_]   # 走査光
-            fringe_i = [(intensity * abs(light_ref_i + y))**2 for y in light_scan_i]   # あるwlでの干渉縞
-            M = max(fringe_i)
-            fringe_ii = [val - M/2 for val in fringe_i]
-            fringe_list.append(fringe_ii)
+            phi_x = k_i * self.scale_ * 2
+            if material == 'BK7':
+                phi_r = np.pi
+            else:
+                phi_r = self.phase_shift(wl, material)   # 反射での位相シフト(ガラス以外)
+            phi_bs = k_i * (self.ref_index_BK7(wl) - self.ref_index_BK7(wl_c)) * l_bs * 2
+            phi_offset = k_i * offset * 2
+            phi = list(map(lambda x: x - phi_r - phi_bs - phi_offset + np.pi, phi_x))
+            fringe = intensity * np.cos(phi)
+            fringe_list.append(fringe)
 
         print("done")
         fringes = np.array(fringe_list)
@@ -163,13 +152,12 @@ if __name__ == '__main__':
     scan_len = 100      # スキャン長さ[um]
     scan_step = 1/1000
     l_bs = 0          # BSの長さ[um]
-    phi = 0            # 一様な位相変化[rad]
-    offset = 0
+    offset = 10
 
     """干渉縞の作成と計算"""
     light = Light(wl_c, wl_bw, wl_step=1/100)
     light.make_scale(scan_len, scan_step)
-    light.make_fringe(l_bs=l_bs, phi=phi, offset=offset)
+    light.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
     light.peak_detect()
 
     """EPとFPの位置を出力"""
