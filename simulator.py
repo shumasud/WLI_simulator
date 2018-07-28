@@ -11,16 +11,12 @@ Environment:
     
 """
 
-import cmath
-import numpy as np
+import pandas as pd
 from pylab import *
 from scipy import signal
-import pandas as pd
-from scipy.integrate import romb
 
 
 class Light(object):
-
     """
     パラメータ
     ------------
@@ -42,7 +38,10 @@ class Light(object):
         self.wl_c = wl_c
         self.wl_bw = wl_bw
         self.wl_step = wl_step
-        self.wl_list_ = np.arange(wl_c - wl_bw/2*2,  (wl_c+wl_step) + wl_bw/2*2, wl_step)  # 波長のリスト
+        self.wl_list_ = np.arange(wl_c - wl_bw / 2 * 2, (wl_c + wl_step) + wl_bw / 2 * 2, wl_step)  # 波長のリスト
+        self.scale_ = None
+        self.fringe_ = None
+        self.envelope_ = None
 
     @staticmethod
     def search_neighbourhood(point, points, position='n'):
@@ -75,12 +74,13 @@ class Light(object):
     @staticmethod
     def ref_index_BK7(wl):
         B1 = 1.03961212E+00
-        B2 =  2.31792344E-01
+        B2 = 2.31792344E-01
         B3 = 1.01046945E+00
-        C1 =  6.00069867E-03
-        C2 =  2.00179144E-02
-        C3 =  1.03560653E+02
-        n = np.sqrt(1 + B1*(wl*wl)/(wl*wl - C1) + B2*(wl*wl)/(wl*wl - C2) + B3*(wl*wl)/(wl*wl - C3))
+        C1 = 6.00069867E-03
+        C2 = 2.00179144E-02
+        C3 = 1.03560653E+02
+        n = np.sqrt(
+            1 + B1 * (wl * wl) / (wl * wl - C1) + B2 * (wl * wl) / (wl * wl - C2) + B3 * (wl * wl) / (wl * wl - C3))
         return n
 
     @staticmethod
@@ -94,7 +94,7 @@ class Light(object):
         param = params[material]
         n = param[0] * wl + param[1]
         k = param[2] * wl + param[3]
-        phi = np.arctan(-2 * k / (n*n + k*k - 1))
+        phi = np.arctan(-2 * k / (n * n + k * k - 1))
         return phi
 
     def I_gauss(self, wl):
@@ -103,9 +103,9 @@ class Light(object):
         return f
 
     def make_scale(self, scan_len, scan_step):
-        self.scale_ = np.arange(-scan_len/2, scan_len/2 + scan_step, scan_step)
+        self.scale_ = np.arange(-scan_len / 2, scan_len / 2 + scan_step, scan_step)
 
-    def make_fringe(self, l_ref=3000*1000, l_bs=0, offset=0, material='BK7'):
+    def make_fringe(self, l_ref=3000 * 1000, l_bs=0, offset=0, material='BK7'):
         """スケールと干渉縞を作成"""
         fringe_list = []
         for wl in self.wl_list_:
@@ -119,7 +119,7 @@ class Light(object):
             if material == 'BK7':
                 phi_r = np.pi
             else:
-                phi_r = self.phase_shift(wl, material)   # 反射での位相シフト(ガラス以外)
+                phi_r = self.phase_shift(wl, material)  # 反射での位相シフト(ガラス以外)
             phi_bs = k_i * (self.ref_index_BK7(wl) - self.ref_index_BK7(wl_c)) * l_bs * 2
             phi_offset = k_i * offset * 2
             phi = list(map(lambda x: x - phi_r - phi_bs - phi_offset + np.pi, phi_x))
@@ -135,11 +135,32 @@ class Light(object):
     def peak_detect(self):
         """EPとFPを検出"""
         self.ep_ = argmax(self.envelope_)
-        fps = signal.argrelmax(self.fringe_)[0]     # 干渉縞の極大値のリスト
+        fps = signal.argrelmax(self.fringe_)[0]  # 干渉縞の極大値のリスト
         self.fp_ = fps[self.search_neighbourhood(argmax(self.envelope_), fps)]
+
+    def down_sample(self, step):
+        self.scale_ = self.scale_[::step]
+        self.fringe_ = self.fringe_[::step]
+        self.envelope_ = abs(signal.hilbert(self.fringe_))
+        self.peak_detect()
+
+    def plot(self, ax):
+        """描画"""
+        ax.plot(self.scale_, self.fringe_)
+        ax.plot(self.scale_, self.envelope_)
+        ax.plot(self.scale_[self.fp_], self.fringe_[self.fp_], "bo")
+        ax.plot(self.scale_[self.ep_], self.envelope_[self.ep_], "go")
+        ax.grid(which='major', color='black', linestyle='-')
+        ax.legend(["fringe", "envelope"])
+
+    def print(self):
+        """EPとFPの位置を出力"""
+        print("ep: " + str(round(self.scale_[self.ep_], 3)) + "um",
+              "fp: " + str(round(self.scale_[self.fp_], 3)) + "um")
 
 
 if __name__ == '__main__':
+    import copy
 
     def write_list(result, c_name, file='result.csv'):
         """結果をCSVファイルに書き込み"""
@@ -147,32 +168,38 @@ if __name__ == '__main__':
         df.columns = c_name
         df.to_csv(file)
 
-    wl_c = 1555 / 1000  # 中心波長[um]
-    wl_bw = 50 / 1000   # バンド幅(FWHM)[um]
-    scan_len = 100      # スキャン長さ[um]
-    scan_step = 1/1000
-    l_bs = 0          # BSの長さ[um]
-    offset = 10
 
-    """干渉縞の作成と計算"""
-    light = Light(wl_c, wl_bw, wl_step=1/100)
+    wl_c = 1555 / 1000  # 中心波長[um]
+    wl_bw = 50 / 1000  # バンド幅(FWHM)[um]
+    scan_len = 80  # スキャン長さ[um]
+    scan_step = 1 / 1000
+    l_bs = 0  # BSの長さ[um]
+    offset = 0
+
+    # 基準干渉縞作成
+    light = Light(wl_c, wl_bw, wl_step=1 / 100)
     light.make_scale(scan_len, scan_step)
     light.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
     light.peak_detect()
 
-    """EPとFPの位置を出力"""
-    print("ep: " + str(round(light.scale_[light.ep_], 3)) + "um", "fp: " + str(round(light.scale_[light.fp_], 3)) + "um")
+    # 干渉縞複製・計算
+    light2 = copy.deepcopy(light)
+    light2.down_sample(100)
 
-    """描画"""
-    plot(light.scale_, light.fringe_)
-    plot(light.scale_, light.envelope_)
-    plot(light.scale_[light.fp_], light.fringe_[light.fp_], "bo")
-    plot(light.scale_[light.ep_], light.envelope_[light.ep_], "go")
-    grid(which='major', color='black', linestyle='-')
-    legend(["fringe", "envelope"])
-    show()
+    # 表示
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(211)
+    ax2 = fig1.add_subplot(212)
+    light.plot(ax1)
+    light2.plot(ax2)
 
-    write_list([[x, y] for x,y in zip(light.scale_, light.fringe_)], ['position', 'intensity'])
+    plt.show()
+    light.print()
+    light2.print()
+
+#    write_list([[x, y] for x, y in zip(light.scale_, light.fringe_)], ['position', 'intensity'])
+
+
 
     """L_bsを変更しながら計算"""
     """
@@ -185,4 +212,3 @@ if __name__ == '__main__':
         peaks.append(peak)
     write_list(peaks)
     """
-
