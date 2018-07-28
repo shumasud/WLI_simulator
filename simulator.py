@@ -186,12 +186,12 @@ if __name__ == '__main__':
     light2 = copy.deepcopy(light)
     light2.down_sample(100)
 
-    # 表示
-    fig1 = plt.figure()
-    ax1 = fig1.add_subplot(211)
-    ax2 = fig1.add_subplot(212)
-    light.plot(ax1)
-    light2.plot(ax2)
+    # # 表示
+    # fig1 = plt.figure()
+    # ax1 = fig1.add_subplot(211)
+    # ax2 = fig1.add_subplot(212)
+    # light.plot(ax1)
+    # light2.plot(ax2)
 
     plt.show()
     light.print()
