@@ -11,37 +11,27 @@ Environment:
     
 """
 
+import numpy as np
 import pandas as pd
 from pylab import *
 from scipy import signal
+from scipy.stats import norm
+import numpy as np
+from scipy import signal
+from scipy import fftpack
+from scipy import interpolate
+import matplotlib.pyplot as plt
+import sys
+from scipy.optimize import curve_fit
+import math
 
-
-class Light(object):
-    """
-    パラメータ
-    ------------
-    wl_c : (val) 中心波長[um]
-    wl_bw : (val) 波長のバンド幅[um]
-    wl_step : (val) 波長のステップ幅[um]
-
-    属性
-    ------------
-    scale_ : (array) 走査鏡の変位[um]
-    fringe_ : (array) 干渉縞[um]
-    envelope_ : (array) 包絡線[um]
-    ep_ : (val) 包絡線のピーク位置[index]
-    fp_ : (val) 干渉縞のピーク位置[index]
-
-    """
-
-    def __init__(self, wl_c, wl_bw, wl_step=1 / 1000):
-        self.wl_c = wl_c
-        self.wl_bw = wl_bw
-        self.wl_step = wl_step
-        self.wl_list_ = np.arange(wl_c - wl_bw / 2 * 2, (wl_c + wl_step) + wl_bw / 2 * 2, wl_step)  # 波長のリスト
-        self.scale_ = None
-        self.fringe_ = None
-        self.envelope_ = None
+class Envelope(object):
+    def __init__(self, x, y, ep0):
+        self.__x = x
+        self.__y = y
+        self.__envelope = []
+        self.__peak = 0
+        self.make_envelope(ep0)
 
     @staticmethod
     def search_neighbourhood(point, points, position='n'):
@@ -65,6 +55,69 @@ class Light(object):
         else:
             print('error')
             sys.exit()
+
+    def make_envelope(self, ep0, f_rate=0.5):
+        """
+        包絡線ピークのインデックスを求める(二乗＋ローパスにより包絡線を求める）
+        緊急作業につき，今後’絶対’修正する
+        """
+        # フィッティングする関数
+        def gaussian(xx, a, b, c):
+            yy = a * np.exp(-((xx - b) ** 2) / (2 * c * c))
+            return yy
+
+        #   フィッティング範囲を決定
+        # fit_range = 1
+        for i in range(ep0, len(self.__y)):
+            if self.__y[i] < f_rate * self.__y[ep0]:
+                fit_range = i - ep0
+                break
+        xx = self.__x[ (ep0-fit_range) : (ep0+fit_range) ]
+        yy = self.__y[ (ep0-fit_range) : (ep0+fit_range) ]
+
+        #   フィッティング
+        initial = [self.__x[ep0], self.__y[ep0], fit_range]
+        coef, pconv = curve_fit(gaussian, xx, yy)
+        # coef, pconv = curve_fit(gaussian, xx, yy, p0=initial)
+
+        #   フィッティング結果から頂点のx座標と包絡線を保存
+        self.__peak = (coef[1], gaussian(coef[1], *coef))
+        self.__envelope = [gaussian(i, coef[0], coef[1], coef[2]) for i in xx]
+        self.__x = xx
+
+    def show(self, ax=None):
+        if ax:
+            ax.plot(self.__x, self.__envelope)
+            ax.plot(self.__peak[0], self.__peak[1], 'o')
+            print("ep: " + str(round(self.__peak[0], 3)) + "um")
+        return
+
+class Light(object):
+    """
+    パラメータ
+    ------------
+    wl_c : (val) 中心波長[um]
+    wl_bw : (val) 波長のバンド幅[um]
+    wl_step : (val) 波長のステップ幅[um]
+
+    属性
+    ------------
+    scale_ : (array) 走査鏡の変位[um]
+    fringe_ : (array) 干渉縞[um]
+    envelope_ : (array) 包絡線[um]
+
+    """
+
+    def __init__(self, wl_c, wl_bw, wl_step=1 / 1000):
+        self.wl_c = wl_c
+        self.wl_bw = wl_bw
+        self.wl_step = wl_step
+        self.wl_list_ = np.arange(wl_c - wl_bw / 2 * 2, (wl_c + wl_step) + wl_bw / 2 * 2, wl_step)  # 波長のリスト
+        self.__scale = None
+        self.__fringe = None
+        self.__covering = None
+        self.__EPs = []
+
 
     @staticmethod
     def ref_index_air(wl):
@@ -103,7 +156,15 @@ class Light(object):
         return f
 
     def make_scale(self, scan_len, scan_step):
-        self.scale_ = np.arange(-scan_len / 2, scan_len / 2 + scan_step, scan_step)
+        self.__scale = np.arange(-scan_len / 2, scan_len / 2 + scan_step, scan_step)
+
+    def make_scale_noised(self, jitter, grad):
+        self.__scale = jitter * randn(len(self.__scale)) + (1 + grad) * self.__scale
+
+    def make_fringe_noised(self, noise, drift):
+        a0 = noise * randn(len(self.__scale))
+        a1 = drift / max(self.__scale) * self.__scale
+        self.__fringe = self.__fringe + a0 + a1
 
     def make_fringe(self, l_ref=3000 * 1000, l_bs=0, offset=0, material='BK7'):
         """スケールと干渉縞を作成"""
@@ -115,7 +176,7 @@ class Light(object):
             k_i = 2 * np.pi / wl
             intensity = self.I_gauss(wl)
 
-            phi_x = k_i * self.scale_ * 2
+            phi_x = k_i * self.__scale * 2
             if material == 'BK7':
                 phi_r = np.pi
             else:
@@ -129,34 +190,42 @@ class Light(object):
         print("done")
         fringes = np.array(fringe_list)
         fringe_total = np.sum(fringes, axis=0)  # それぞれの波長での干渉縞を重ね合わせ
-        self.fringe_ = fringe_total / max(fringe_total)
-        self.envelope_ = abs(signal.hilbert(self.fringe_))
+        self.__fringe = fringe_total / max(fringe_total)
 
-    def peak_detect(self):
-        """EPとFPを検出"""
-        self.ep_ = argmax(self.envelope_)
-        fps = signal.argrelmax(self.fringe_)[0]  # 干渉縞の極大値のリスト
-        self.fp_ = fps[self.search_neighbourhood(argmax(self.envelope_), fps)]
+    def peak_detect(self, threshold = 0.5):
+        #   包絡線極大値のインデックスのリストを求める
+        self.__covering = abs(signal.hilbert(self.__fringe))
+        relmaxs = signal.argrelmax(self.__covering)[0]
+        #   閾値を越えた極大値のみ処理
+        for relmax in relmaxs:
+            if self.__covering[relmax] < threshold:
+                continue
+            else:
+                print(relmax)
+                ep = Envelope(self.__scale, self.__covering, relmax)
+                self.__EPs.append(ep)
+
 
     def down_sample(self, step):
-        self.scale_ = self.scale_[::step]
-        self.fringe_ = self.fringe_[::step]
-        self.envelope_ = abs(signal.hilbert(self.fringe_))
-        self.peak_detect()
+        self.__scale = self.__scale[::step]
+        self.__fringe = self.__fringe[::step]
 
-    def plot(self, ax):
-        """描画"""
-        ax.plot(self.scale_, self.fringe_)
-        ax.plot(self.scale_, self.envelope_)
-        ax.plot(self.scale_[self.fp_], self.fringe_[self.fp_], "bo")
-        ax.plot(self.scale_[self.ep_], self.envelope_[self.ep_], "go")
-        ax.grid(which='major', color='black', linestyle='-')
-        ax.legend(["fringe", "envelope"])
+    def show(self, ax = None):
+        if ax:
+            ax.plot(self.__scale, self.__fringe)
+            ax.plot(self.__scale, self.__covering)
+            ax.grid(which='major', color='black', linestyle='-')
+            # for ep in self.__EPs:
+                # ep.show(ax)
+            ax.legend(["fringe", "envelope", "fitting"])
 
-    def print(self):
-        """EPとFPの位置を出力"""
-        print("ep: " + str(round(self.scale_[self.ep_], 3)) + "um",
-              "fp: " + str(round(self.scale_[self.fp_], 3)) + "um")
+            # ax.scatter(self.__scale[::20], self.__fringe[::20], c = 'red')
+        # """EPとFPを検出"""
+        # self.__ep = argmax(self.envelope_)
+        # fps = signal.argrelmax(self.__fringe)[0]  # 干渉縞の極大値のリスト
+        # self.fp_ = fps[self.search_neighbourhood(argmax(self.envelope_), fps)]
+        # print("ep: " + str(round(self.__scale[self.ep_], 3)) + "um",
+        #       "fp: " + str(round(self.__scale[self.fp_], 3)) + "um")
 
 
 if __name__ == '__main__':
@@ -170,32 +239,43 @@ if __name__ == '__main__':
 
 
     wl_c = 1555 / 1000  # 中心波長[um]
-    wl_bw = 50 / 1000  # バンド幅(FWHM)[um]
-    scan_len = 80  # スキャン長さ[um]
-    scan_step = 1 / 1000
+    wl_bw = 20 / 1000  # バンド幅(FWHM)[um]
+    scan_len = 100  # スキャン長さ[um]
+    scan_step = 2 / 1000
     l_bs = 0  # BSの長さ[um]
     offset = 0
 
     # 基準干渉縞作成
-    light = Light(wl_c, wl_bw, wl_step=1 / 100)
+    light = Light(wl_c, wl_bw, wl_step=10 / 1000)
     light.make_scale(scan_len, scan_step)
+    light.make_scale_noised(0.000/1000, 0/1000)
     light.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
-    light.peak_detect()
+    light.make_fringe_noised(0.000/1000, 0)
 
     # 干渉縞複製・計算
     light2 = copy.deepcopy(light)
     light2.down_sample(100)
+    light3 = copy.deepcopy(light)
+    light3.make_scale_noised(100/1000, 0/1000)
+    light.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
+    light3.down_sample(100)
 
-    # # 表示
-    # fig1 = plt.figure()
-    # ax1 = fig1.add_subplot(211)
-    # ax2 = fig1.add_subplot(212)
-    # light.plot(ax1)
-    # light2.plot(ax2)
+    light.peak_detect()
+    light2.peak_detect()
+    light3.peak_detect()
+
+    # 表示
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(111)
+    fig2 = plt.figure()
+    ax2 = fig2.add_subplot(111)
+    fig3 = plt.figure()
+    ax3 = fig3.add_subplot(111)
+    light.show(ax1)
+    light2.show(ax2)
+    light3.show(ax3)
 
     plt.show()
-    light.print()
-    light2.print()
 
 #    write_list([[x, y] for x, y in zip(light.scale_, light.fringe_)], ['position', 'intensity'])
 
