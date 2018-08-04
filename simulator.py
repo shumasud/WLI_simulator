@@ -238,15 +238,15 @@ if __name__ == '__main__':
         df.to_csv(file)
 
 
-    wl_c = 1555 / 1000  # 中心波長[um]
-    wl_bw = 20 / 1000  # バンド幅(FWHM)[um]
+    wl_c = 1560 / 1000  # 中心波長[um]
+    wl_bw = 25 / 1000  # バンド幅(FWHM)[um]
     scan_len = 100  # スキャン長さ[um]
-    scan_step = 2 / 1000
+    scan_step = 1 / 1000
     l_bs = 0  # BSの長さ[um]
     offset = 0
 
     # 基準干渉縞作成
-    light = Light(wl_c, wl_bw, wl_step=10 / 1000)
+    light = Light(wl_c, wl_bw, wl_step=1 / 1000)
     light.make_scale(scan_len, scan_step)
     light.make_scale_noised(0.000/1000, 0/1000)
     light.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
@@ -257,7 +257,7 @@ if __name__ == '__main__':
     light2.down_sample(100)
     light3 = copy.deepcopy(light)
     light3.make_scale_noised(100/1000, 0/1000)
-    light.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
+    # light3.make_fringe(l_bs=l_bs, offset=offset, material='BK7')
     light3.down_sample(100)
 
     light.peak_detect()
